@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.ru.henchan
 
+import android.content.SharedPreferences
 import eu.kanade.tachiyomi.multisrc.multichan.MultiChan
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.asObservable
@@ -11,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.utils.firstInstanceOrNull
+import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.tryParse
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -25,6 +27,8 @@ import java.util.Locale
 
 @Source
 abstract class HenChan : MultiChan() {
+
+    private val preferences: SharedPreferences by getPreferencesLazy()
 
     // Site retired /mostfavorites (returns an empty maintenance page); closest equivalent
     // still alive is sorting the "newest" listing by favorites, descending.
@@ -91,12 +95,37 @@ abstract class HenChan : MultiChan() {
     // Ongoing works get published one part at a time, each part its own separate manga entry
     // (e.g. "Друзья - часть 50"), so browsing/search listings show the same series many times
     // over. Clean the display title so duplicates collapse to the same string, then drop
-    // repeats within the page.
+    // repeats within the page. The url itself gets swapped for a cached canonical one when we
+    // already know which group this part belongs to (see chapterListParse) - Komikku fixes a
+    // manga's identity to whatever url it saw *here*, at listing time, and never updates it
+    // again from mangaDetailsParse/getMangaUpdate results, so this is the only place a redirect
+    // can actually take effect.
     override fun popularMangaFromElement(element: Element): SManga {
         val manga = super.popularMangaFromElement(element)
         manga.thumbnail_url = element.selectFirst("img")?.attr("abs:src")?.getHQThumbnail()
         manga.title = manga.title.stripChapterSuffix()
+        cachedCanonicalUrl(manga.url)?.let { manga.setUrlWithoutDomain(it) }
         return manga
+    }
+
+    private fun mangaIdFromUrl(url: String): String? = MANGA_ID_REGEX.find(url)?.groupValues?.get(1)
+
+    private fun cachedCanonicalUrl(url: String): String? {
+        val id = mangaIdFromUrl(url) ?: return null
+        return preferences.getString(GROUP_PREF_PREFIX + id, null)
+    }
+
+    // Remembers which numbered parts belong together, keyed by each part's own id, so that the
+    // *next* time any of them turns up in a listing we can point it at the same canonical url
+    // right away - see the comment on popularMangaFromElement for why this has to happen there.
+    private fun cacheChapterGroup(siblingUrlsOldestFirst: List<String>) {
+        if (siblingUrlsOldestFirst.size < 2) return
+        val canonicalUrl = siblingUrlsOldestFirst.first()
+        val editor = preferences.edit()
+        siblingUrlsOldestFirst.forEach { url ->
+            mangaIdFromUrl(url)?.let { id -> editor.putString(GROUP_PREF_PREFIX + id, canonicalUrl) }
+        }
+        editor.apply()
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -172,30 +201,6 @@ abstract class HenChan : MultiChan() {
             ?.firstOrNull { it.text().isNotBlank() }
             ?.text()
         manga.thumbnail_url = document.selectFirst("img#cover")?.attr("abs:src")?.getHQThumbnail()
-
-        // Same fragmentation as above, but the consequence here is worse: each part is a
-        // distinct manga.url, so Komikku treats every part as an unrelated title and reading
-        // history never carries over between them. Redirect once to whichever entry the
-        // site's own "related" listing puts first (oldest/root) so every part of a series
-        // converges on the same library entry, no matter which one was opened.
-        if (CHAPTER_MARKER_REGEX.containsMatchIn(manga.title)) {
-            val relatedDoc = runCatching {
-                val relatedUrl = document.baseUri().replace("/manga/", "/related/")
-                client.newCall(GET(relatedUrl, headers)).execute().use { it.asJsoup() }
-            }.getOrNull()
-
-            // A title that merely looks like "part N" but has no true siblings yet gets a
-            // "похожий на" recommendations page here instead - completely unrelated titles.
-            // Bail out rather than risk merging into one of those.
-            val isRecommendations = relatedDoc?.select("#right > div:nth-child(4)")?.text()?.contains(" похожий на ") == true
-
-            val rootLink = if (isRecommendations) null else relatedDoc?.selectFirst("${chapterListSelector()} h2 a")
-
-            if (rootLink != null && rootLink.attr("abs:href") != document.baseUri()) {
-                manga.title = rootLink.attr("title")
-                manga.setUrlWithoutDomain(rootLink.attr("abs:href"))
-            }
-        }
 
         return manga
     }
@@ -288,6 +293,11 @@ abstract class HenChan : MultiChan() {
             nextElement = nextPage.selectFirst("div#pagination_related a:contains(Вперед)")
         }
 
+        // Learn the whole group now so future listing scrapes (see popularMangaFromElement)
+        // can point any of these parts at the same canonical (oldest/first) url right away,
+        // instead of only ever fixing this manga.url - which Komikku won't let us touch again.
+        cacheChapterGroup(result.map { it.url })
+
         return result.reversed()
     }
 
@@ -336,6 +346,8 @@ abstract class HenChan : MultiChan() {
         // the end - e.g. "Gunjo Gunzo - часть 2. Я даже не знаю её имени 2" has it mid-string.
         private val CHAPTER_MARKER_REGEX = "[-—,]\\s*(?:часть|глава)\\.?\\s*\\d"
             .toRegex(RegexOption.IGNORE_CASE)
+        private val MANGA_ID_REGEX = "/manga/(\\d+)-".toRegex()
+        private const val GROUP_PREF_PREFIX = "chapter_group_"
         private val exhentaiDateFormat by lazy {
             SimpleDateFormat("dd MMMM yyyy", Locale("ru"))
         }
