@@ -107,17 +107,6 @@ abstract class GroupLe :
 
     // ============================== Search ===============================
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        // A picked tag browses /list/tag/<slug> directly instead of /search/advancedResults -
-        // that endpoint takes one tag at a time (no way to combine it with the other filters
-        // below, confirmed: /list/tag/a+b 404s), so it's handled as its own thing rather than
-        // forced into the combinable el_* query-param scheme the rest of this function builds.
-        filters.filterIsInstance<TagSelect>().firstOrNull()?.selectedSlug?.let { slug ->
-            if (slug.isNotEmpty()) {
-                val document = client.get("$baseUrl/list/tag/$slug?offset=${50 * (page - 1)}").asJsoup()
-                return parseMangasPage(document)
-            }
-        }
-
         val url = "$baseUrl/search/advancedResults?offset=${50 * (page - 1)}".toHttpUrl().newBuilder()
 
         if (query.isNotEmpty()) {
@@ -164,7 +153,13 @@ abstract class GroupLe :
                 }
 
                 is TextTag -> {
-                    resolveTextTag(filter)?.let { id -> url.addQueryParameter("many-el_${filter.type}", id) }
+                    resolveElementId(filter.type, filter.state)?.let { id -> url.addQueryParameter("many-el_${filter.type}", id) }
+                }
+
+                is TagSelect -> {
+                    filter.selectedName?.let { name ->
+                        resolveElementId(filter.type, name)?.let { id -> url.addQueryParameter("many-el_${filter.type}", id) }
+                    }
                 }
 
                 else -> {}
@@ -176,17 +171,18 @@ abstract class GroupLe :
     }
 
     // "Тэги"/"Пародии"-style fields on /search/advanced aren't a fixed checkbox list -
-    // fetchFilterData can't enumerate them (the site itself only offers live autocomplete
-    // over what's presumably thousands of entries, no "list them all" endpoint exists). This
-    // resolves whatever the user typed the same way the site's own JS widget does, at
-    // request-build time, so any of those tags becomes searchable despite not being fetchable.
-    private suspend fun resolveTextTag(filter: TextTag): String? {
-        val query = filter.state.trim()
+    // fetchFilterData can't enumerate them with an id attached (the site itself only offers
+    // live autocomplete over what's presumably thousands of entries, no bulk id listing
+    // exists - see fullTagListPath for the one field that at least gets a name/slug listing).
+    // This resolves a name to its numeric id the same way the site's own JS widget does, at
+    // request-build time, so it plugs into the same combinable many-el_<type> query param as
+    // every other filter here instead of needing its own separate browse endpoint.
+    private suspend fun resolveElementId(type: Int, query: String): String? {
         if (query.isBlank()) return null
 
         val url = "$baseUrl/search/elementsByType".toHttpUrl().newBuilder()
             .addQueryParameter("useLink", "")
-            .addQueryParameter("type", filter.type.toString())
+            .addQueryParameter("type", type.toString())
             .addQueryParameter("sort", "")
             .addQueryParameter("q", query)
             .build()
@@ -331,21 +327,18 @@ abstract class GroupLe :
     open class MoreList(more: List<Genre>) : Filter.Group<Genre>("Прочее", more)
     open class AdditionalFilterList(fils: List<Genre>) : Filter.Group<Genre>("Фильтры", fils)
 
-    // See resolveTextTag - [type] is the site's own numeric id for this searchable field
+    // See resolveElementId - [type] is the site's own numeric id for this searchable field
     // (e.g. tags vs parodies), matching the `type=` param the site's own widget sends to
     // /search/elementsByType.
     open class TextTag(name: String, val type: Int) : Filter.Text(name)
 
-    // A single-pick alternative to TextTag for a field the site happens to publish a full
-    // (if unnumbered - see fetchAllTagPages) listing of, e.g. "Тэги": browsable one at a time
-    // via a slug (/list/tag/<slug>), not combinable with anything else - see getSearchMangaList.
-    open class TagSelect(label: String, tagsWithSlugs: List<Pair<String, String>>) :
-        Filter.Select<String>(
-            label,
-            (listOf("Любой" to "") + tagsWithSlugs).map { it.first }.toTypedArray(),
-        ) {
-        private val slugs = (listOf("Любой" to "") + tagsWithSlugs).map { it.second }
-        val selectedSlug: String get() = slugs.getOrElse(state) { "" }
+    // A dropdown alternative to TextTag for a field the site happens to publish a full listing
+    // of (e.g. "Тэги" via fullTagListPath), so picking one doesn't require typing the exact
+    // name. Still resolved through the same /search/elementsByType lookup as TextTag at search
+    // time (see resolveElementId in getSearchMangaList) so it combines with every other filter.
+    open class TagSelect(label: String, names: List<String>, val type: Int) : Filter.Select<String>(label, (listOf("Любой") + names).toTypedArray()) {
+        private val options = listOf("Любой") + names
+        val selectedName: String? get() = options.getOrNull(state)?.takeIf { state != 0 }
     }
 
     // ============================ Filter data =============================
@@ -361,7 +354,7 @@ abstract class GroupLe :
     // publishes as a full, paginated listing despite not exposing it as checkboxes on
     // /search/advanced (e.g. "tags" for AllHentai's ~190-strong "Тэги" list) - see TagSelect.
     // null (the default) skips this; most sites' extra fields are pure autocomplete with no
-    // "list them all" page at all, only reachable via TextTag/resolveTextTag instead.
+    // "list them all" page at all, only reachable via TextTag instead.
     protected open val fullTagListPath: String? = null
 
     override suspend fun fetchFilterData(): JsonElement {
@@ -394,17 +387,12 @@ abstract class GroupLe :
             }
 
             fullTagListPath?.let { path ->
-                val tags = fetchPagedSlugList(path)
+                val tags = fetchPagedNameList(path)
                 if (tags.isNotEmpty()) {
                     addJsonObject {
                         put("group", TAGS_GROUP_KEY)
                         putJsonArray("options") {
-                            tags.forEach { (name, slug) ->
-                                addJsonObject {
-                                    put("id", slug)
-                                    put("name", name)
-                                }
-                            }
+                            tags.forEach { name -> addJsonObject { put("name", name) } }
                         }
                     }
                 }
@@ -413,17 +401,15 @@ abstract class GroupLe :
     }
 
     // /list/<path>/sort_NAME is a plain paginated table (50/page, ~4 pages for AllHentai's
-    // tags), each row just a name + slug - no numeric id, unlike the checkbox groups above.
-    // Capped at 20 pages (1000 entries) as a sanity limit against an unexpectedly huge list.
-    private suspend fun fetchPagedSlugList(path: String): List<Pair<String, String>> {
-        val results = mutableListOf<Pair<String, String>>()
+    // tags) - just names, no numeric id (see resolveElementId for how a picked name becomes
+    // an id at search time). Capped at 20 pages (1000 entries) as a sanity limit against an
+    // unexpectedly huge list.
+    private suspend fun fetchPagedNameList(path: String): List<String> {
+        val results = mutableListOf<String>()
         var offset = 0
         repeat(20) {
             val document = client.get("$baseUrl/list/$path/sort_NAME?offset=$offset").asJsoup()
-            val page = document.select("table.table-hover a.element-link").mapNotNull { a ->
-                val slug = a.attr("href").substringAfterLast('/').takeIf(String::isNotBlank) ?: return@mapNotNull null
-                a.text().trim() to slug
-            }
+            val page = document.select("table.table-hover a.element-link").map { it.text().trim() }.filter { it.isNotEmpty() }
             if (page.isEmpty()) return results
 
             results += page
@@ -441,14 +427,10 @@ abstract class GroupLe :
             Genre(option["name"]!!.string, id)
         }
 
-    protected fun JsonElement?.filterTagList(): List<Pair<String, String>>? = this?.jsonArray
+    protected fun JsonElement?.filterTagList(): List<String>? = this?.jsonArray
         ?.firstOrNull { it["group"]?.stringOrNull == TAGS_GROUP_KEY }
         ?.get("options")?.jsonArray
-        ?.mapNotNull { option ->
-            val slug = option["id"]?.stringOrNull ?: return@mapNotNull null
-            val name = option["name"]?.stringOrNull ?: return@mapNotNull null
-            name to slug
-        }
+        ?.mapNotNull { option -> option["name"]?.stringOrNull }
         ?.takeIf { it.isNotEmpty() }
 
     // ============================= Chapters ==============================
