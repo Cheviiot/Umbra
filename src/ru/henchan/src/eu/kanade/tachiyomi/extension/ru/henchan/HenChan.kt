@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.multisrc.multichan.MultiChan
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.asObservable
 import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
@@ -87,10 +88,63 @@ abstract class HenChan : MultiChan() {
             ) // # for later so we know what type manga is it
     }
 
+    // Ongoing works get published one part at a time, each part its own separate manga entry
+    // (e.g. "Друзья - часть 50"), so browsing/search listings show the same series many times
+    // over. Clean the display title so duplicates collapse to the same string, then drop
+    // repeats within the page.
     override fun popularMangaFromElement(element: Element): SManga {
         val manga = super.popularMangaFromElement(element)
         manga.thumbnail_url = element.selectFirst("img")?.attr("abs:src")?.getHQThumbnail()
+        manga.title = manga.title.stripChapterSuffix()
         return manga
+    }
+
+    override fun popularMangaParse(response: Response): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }.distinctByTitle()
+        val hasNextPage = document.select(popularMangaNextPageSelector()).isNotEmpty()
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    override fun latestUpdatesParse(response: Response): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select(latestUpdatesSelector()).map { latestUpdatesFromElement(it) }.distinctByTitle()
+        val hasNextPage = document.select(latestUpdatesNextPageSelector()).isNotEmpty()
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        val document = response.asJsoup()
+        var hasNextPage = false
+
+        val mangas = document.select(searchMangaSelector()).map { searchMangaFromElement(it) }.distinctByTitle()
+
+        val nextSearchPage = document.select(searchMangaNextPageSelector())
+        if (nextSearchPage.isNotEmpty()) {
+            val query = document.selectFirst("input#searchinput")?.attr("value") ?: ""
+            val pageNum = nextSearchPage.let { selector ->
+                val onClick = selector.attr("onclick")
+                onClick.split("""\\d+""")
+            }
+            nextSearchPage.attr("href", "$baseUrl/?do=search&subaction=search&story=$query&search_start=$pageNum")
+            hasNextPage = true
+        }
+
+        if (document.select(popularMangaNextPageSelector()).isNotEmpty()) {
+            hasNextPage = true
+        }
+
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    private fun List<SManga>.distinctByTitle(): List<SManga> {
+        val seen = HashSet<String>()
+        return filter { seen.add(it.title) }
+    }
+
+    private fun String.stripChapterSuffix(): String {
+        val stripped = CHAPTER_SUFFIX_REGEX.replace(this, "").trim()
+        return stripped.ifEmpty { this }
     }
 
     // Not delegating to super: the site renamed the "Тип" label to "Аниме/манга" and now
@@ -114,6 +168,24 @@ abstract class HenChan : MultiChan() {
             ?.firstOrNull { it.text().isNotBlank() }
             ?.text()
         manga.thumbnail_url = document.selectFirst("img#cover")?.attr("abs:src")?.getHQThumbnail()
+
+        // Same fragmentation as above, but the consequence here is worse: each part is a
+        // distinct manga.url, so Komikku treats every part as an unrelated title and reading
+        // history never carries over between them. Redirect once to whichever entry the
+        // site's own "related" listing puts first (oldest/root) so every part of a series
+        // converges on the same library entry, no matter which one was opened.
+        if (CHAPTER_SUFFIX_REGEX.containsMatchIn(manga.title)) {
+            val relatedUrl = document.baseUri().replace("/manga/", "/related/")
+            val rootLink = runCatching {
+                client.newCall(GET(relatedUrl, headers)).execute().use { it.asJsoup() }
+            }.getOrNull()?.selectFirst("${chapterListSelector()} h2 a")
+
+            if (rootLink != null && rootLink.attr("abs:href") != document.baseUri()) {
+                manga.title = rootLink.attr("title")
+                manga.setUrlWithoutDomain(rootLink.attr("abs:href"))
+            }
+        }
+
         return manga
     }
 
@@ -248,6 +320,10 @@ abstract class HenChan : MultiChan() {
     companion object {
         private val manganewThumbsRegex = "(?<=/)manganew_thumbs\\w*?(?=/)".toRegex(RegexOption.IGNORE_CASE)
         private val chapterNumberRegex = "(глава\\s|часть\\s)([0-9]+\\.?[0-9]*)".toRegex(RegexOption.IGNORE_CASE)
+
+        // Matches a trailing "- часть N", "- часть N (стр. X-Y)", "- Глава N", ", Глава N" etc.
+        private val CHAPTER_SUFFIX_REGEX = "\\s*[-—,]\\s*(?:часть|глава)\\.?\\s*\\d+(?:\\.\\d+)?(?:\\s*\\([^)]*\\))?\\s*$"
+            .toRegex(RegexOption.IGNORE_CASE)
         private val exhentaiDateFormat by lazy {
             SimpleDateFormat("dd MMMM yyyy", Locale("ru"))
         }
