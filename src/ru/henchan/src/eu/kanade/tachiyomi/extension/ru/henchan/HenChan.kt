@@ -122,6 +122,16 @@ abstract class HenChan : MultiChan() {
         if (siblingUrlsOldestFirst.size < 2) return
         val canonicalUrl = siblingUrlsOldestFirst.first()
         val editor = preferences.edit()
+
+        // A heavy reader browsing years of ongoing series would otherwise grow this file
+        // forever (one key per part ever seen). Reset rather than let it creep past a size
+        // where loading it starts costing noticeable startup time - losing the cache just
+        // means the next few series encountered take the "first time" path again.
+        val groupKeyCount = preferences.all.keys.count { it.startsWith(GROUP_PREF_PREFIX) }
+        if (groupKeyCount > MAX_CACHED_GROUP_ENTRIES) {
+            preferences.all.keys.filter { it.startsWith(GROUP_PREF_PREFIX) }.forEach { editor.remove(it) }
+        }
+
         siblingUrlsOldestFirst.forEach { url ->
             mangaIdFromUrl(url)?.let { id -> editor.putString(GROUP_PREF_PREFIX + id, canonicalUrl) }
         }
@@ -348,6 +358,7 @@ abstract class HenChan : MultiChan() {
             .toRegex(RegexOption.IGNORE_CASE)
         private val MANGA_ID_REGEX = "/manga/(\\d+)-".toRegex()
         private const val GROUP_PREF_PREFIX = "chapter_group_"
+        private const val MAX_CACHED_GROUP_ENTRIES = 5000
         private val exhentaiDateFormat by lazy {
             SimpleDateFormat("dd MMMM yyyy", Locale("ru"))
         }

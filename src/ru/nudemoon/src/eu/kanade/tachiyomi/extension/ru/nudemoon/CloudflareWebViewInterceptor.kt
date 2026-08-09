@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -25,7 +26,10 @@ class CloudflareWebViewInterceptor(private val domain: String) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        if (!request.url.host.endsWith(domain) || request.method != "GET") {
+        // A WebView can only rescue this by extracting page HTML, which is meaningless for a
+        // page image - if Cloudflare ever blocks those too, let them fail normally instead of
+        // handing the reader a page of markup instead of a picture.
+        if (!request.url.host.endsWith(domain) || request.method != "GET" || looksLikeImage(request.url.encodedPath)) {
             return chain.proceed(request)
         }
 
@@ -33,31 +37,40 @@ class CloudflareWebViewInterceptor(private val domain: String) : Interceptor {
         if (!isChallenge(response)) return response
         response.close()
 
-        val html = runWebViewBlocking(chain.call(), session = session, timeout = 45.seconds) {
-            useOkHttpNetwork = false
+        val html = try {
+            runWebViewBlocking<String>(chain.call(), session = session, timeout = 45.seconds) {
+                useOkHttpNetwork = false
 
-            onReceivedError { req, error ->
-                if (req.isForMainFrame) reject(IllegalStateException("WebView load failed: ${error.description}"))
-            }
+                onReceivedError { req, error ->
+                    if (req.isForMainFrame) reject(IllegalStateException("WebView load failed: ${error.description}"))
+                }
 
-            poll(interval = 500.milliseconds) {
-                evaluateJs("document.title") { titleJson ->
-                    val title = runCatching { titleJson.parseAs<String>() }.getOrDefault("")
-                    if (CHALLENGE_TITLE_REGEX.containsMatchIn(title)) return@evaluateJs
+                poll(interval = 500.milliseconds) {
+                    evaluateJs("document.title") { titleJson ->
+                        val title = runCatching { titleJson.parseAs<String>() }.getOrDefault("")
+                        if (CHALLENGE_TITLE_REGEX.containsMatchIn(title)) return@evaluateJs
 
-                    evaluateJs("document.documentElement.outerHTML") { htmlJson ->
-                        val body = runCatching { htmlJson.parseAs<String>() }.getOrNull()
-                        if (!body.isNullOrEmpty()) resolve(body)
+                        evaluateJs("document.documentElement.outerHTML") { htmlJson ->
+                            val body = runCatching { htmlJson.parseAs<String>() }.getOrNull()
+                            if (!body.isNullOrEmpty()) resolve(body)
+                        }
                     }
                 }
-            }
 
-            loadUrl(
-                request.url.toString(),
-                headers = buildMap {
-                    request.header("Referer")?.let { put("Referer", it) }
-                },
-            )
+                loadUrl(
+                    request.url.toString(),
+                    headers = buildMap {
+                        request.header("Referer")?.let { put("Referer", it) }
+                    },
+                )
+            }
+        } catch (e: IOException) {
+            throw e
+        } catch (e: Exception) {
+            // runWebView's own failure modes (timeout, WebView render process death, ...)
+            // aren't IOExceptions, so left alone they'd surface as an unhandled crash instead
+            // of the normal "couldn't load" error the rest of the app expects from a source.
+            throw IOException("Не удалось пройти проверку Cloudflare: ${e.message}", e)
         }
 
         return Response.Builder()
@@ -75,7 +88,10 @@ class CloudflareWebViewInterceptor(private val domain: String) : Interceptor {
         return CHALLENGE_TITLE_REGEX.containsMatchIn(response.peekBody(4096).string())
     }
 
+    private fun looksLikeImage(path: String): Boolean = IMAGE_EXTENSION_REGEX.containsMatchIn(path)
+
     private companion object {
         val CHALLENGE_TITLE_REGEX = Regex("Just a moment|Attention Required|Checking your browser", RegexOption.IGNORE_CASE)
+        val IMAGE_EXTENSION_REGEX = Regex("""\.(jpe?g|png|gif|webp|avif|bmp)$""", RegexOption.IGNORE_CASE)
     }
 }
