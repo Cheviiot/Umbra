@@ -142,9 +142,13 @@ abstract class HenChan : MultiChan() {
         return filter { seen.add(it.title) }
     }
 
+    // The marker isn't always at the end - e.g. "Gunjo Gunzo - часть 2. Я даже не знаю её
+    // имени 2" has a per-part subtitle trailing after it. Cut at the first occurrence and
+    // keep only what's before it, rather than only stripping a trailing match.
     private fun String.stripChapterSuffix(): String {
-        val stripped = CHAPTER_SUFFIX_REGEX.replace(this, "").trim()
-        return stripped.ifEmpty { this }
+        val match = CHAPTER_MARKER_REGEX.find(this) ?: return this
+        val truncated = this.substring(0, match.range.first).trim()
+        return truncated.ifEmpty { this }
     }
 
     // Not delegating to super: the site renamed the "Тип" label to "Аниме/манга" and now
@@ -174,7 +178,7 @@ abstract class HenChan : MultiChan() {
         // history never carries over between them. Redirect once to whichever entry the
         // site's own "related" listing puts first (oldest/root) so every part of a series
         // converges on the same library entry, no matter which one was opened.
-        if (CHAPTER_SUFFIX_REGEX.containsMatchIn(manga.title)) {
+        if (CHAPTER_MARKER_REGEX.containsMatchIn(manga.title)) {
             val relatedDoc = runCatching {
                 val relatedUrl = document.baseUri().replace("/manga/", "/related/")
                 client.newCall(GET(relatedUrl, headers)).execute().use { it.asJsoup() }
@@ -328,8 +332,9 @@ abstract class HenChan : MultiChan() {
         private val manganewThumbsRegex = "(?<=/)manganew_thumbs\\w*?(?=/)".toRegex(RegexOption.IGNORE_CASE)
         private val chapterNumberRegex = "(глава\\s|часть\\s)([0-9]+\\.?[0-9]*)".toRegex(RegexOption.IGNORE_CASE)
 
-        // Matches a trailing "- часть N", "- часть N (стр. X-Y)", "- Глава N", ", Глава N" etc.
-        private val CHAPTER_SUFFIX_REGEX = "\\s*[-—,]\\s*(?:часть|глава)\\.?\\s*\\d+(?:\\.\\d+)?(?:\\s*\\([^)]*\\))?\\s*$"
+        // Matches "- часть N", "- Глава N", ", Глава N" etc. anywhere in a title, not just at
+        // the end - e.g. "Gunjo Gunzo - часть 2. Я даже не знаю её имени 2" has it mid-string.
+        private val CHAPTER_MARKER_REGEX = "[-—,]\\s*(?:часть|глава)\\.?\\s*\\d"
             .toRegex(RegexOption.IGNORE_CASE)
         private val exhentaiDateFormat by lazy {
             SimpleDateFormat("dd MMMM yyyy", Locale("ru"))
