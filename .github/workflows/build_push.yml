@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches:
-      # - main
       - master
     paths:
       - '**'
@@ -98,7 +97,7 @@ jobs:
 
       - name: Upload APKs (${{ matrix.chunk.number }})
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.repository == 'yuzono/tachiyomi-extensions'
+        if: github.repository == 'Cheviiot/Umbra'
         with:
           name: "individual-apks-${{ matrix.chunk.number }}"
           path: |
@@ -117,13 +116,15 @@ jobs:
     # Run whenever there's anything to publish, new/changed builds OR only deletions
     if: >-
       always() &&
-      github.repository == 'yuzono/tachiyomi-extensions' &&
+      github.repository == 'Cheviiot/Umbra' &&
       needs.prepare.result == 'success' &&
       needs.build.result != 'failure' &&
       needs.build.result != 'cancelled' &&
       needs.prepare.outputs.delete != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - name: Download APK artifacts
         if: needs.build.result == 'success'
@@ -141,8 +142,6 @@ jobs:
       - name: Checkout repo branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: yuzono/tachiyomi-repo
-          token: ${{ secrets.BOT_PAT }}
           ref: repo
           path: repo
           persist-credentials: true
@@ -160,22 +159,9 @@ jobs:
         with:
           message: "${{ needs.prepare.outputs.latestCommitMessage }}"
           cwd: "./repo"
-          # committer_name: github-actions[bot]
-          # committer_email: github-actions[bot]@users.noreply.github.com
 
-      - name: Sync repo
-        env:
-          COMMIT_MESSAGE: ${{ needs.prepare.outputs.latestCommitMessage }}
+      - name: Purge jsDelivr cache
         run: |
-          cd repo
-          git config user.name "Yūzōnō"
-          git config user.email "yuzono@users.noreply.github.com"
-          git remote set-url origin https://github.com/yuzono/manga-repo.git
-          git fetch origin
-          git reset origin/repo
-          git add -A
-          git commit --amend -m "$COMMIT_MESSAGE" --no-sign --allow-empty || echo "No changes to commit"
-          git push origin HEAD:repo --force
-          curl https://purge.jsdelivr.net/gh/yuzono/manga-repo@repo/index.min.json
-          curl https://purge.jsdelivr.net/gh/yuzono/manga-repo@repo/index.json
-          curl https://purge.jsdelivr.net/gh/yuzono/manga-repo@repo/index.pb
+          curl https://purge.jsdelivr.net/gh/Cheviiot/Umbra@repo/index.min.json
+          curl https://purge.jsdelivr.net/gh/Cheviiot/Umbra@repo/index.json
+          curl https://purge.jsdelivr.net/gh/Cheviiot/Umbra@repo/index.pb

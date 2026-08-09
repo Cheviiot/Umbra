@@ -25,6 +25,10 @@ import java.util.Locale
 @Source
 abstract class HenChan : MultiChan() {
 
+    // Site retired /mostfavorites (returns an empty maintenance page); closest equivalent
+    // still alive is sorting the "newest" listing by favorites, descending.
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/manga/newest&n=favdesc?offset=${20 * (page - 1)}", headers)
+
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/manga/newest?offset=${20 * (page - 1)}", headers)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -89,8 +93,26 @@ abstract class HenChan : MultiChan() {
         return manga
     }
 
+    // Not delegating to super: the site renamed the "Тип" label to "Аниме/манга" and now
+    // leaves a blank text node before the description's leading <br>, breaking both fields
+    // in MultiChan's version of this parser.
     override fun mangaDetailsParse(document: Document): SManga {
-        val manga = super.mangaDetailsParse(document)
+        val infoElement = document.select("#info_wrap tr,#info_wrap > div")
+        val rawCategory = infoElement.select(":contains(Аниме/манга) a").text().lowercase()
+
+        val manga = SManga.create()
+        manga.title = document.select("title").text().substringBefore(" »")
+        manga.author = infoElement.select(":contains(Автор) .item2").text()
+        manga.genre = rawCategory + ", " + document.select(".sidetags ul a:last-child").joinToString { it.text() }
+        manga.status = when {
+            infoElement.text().contains("перевод завершен") -> SManga.COMPLETED
+            infoElement.text().contains("перевод продолжается") -> SManga.ONGOING
+            else -> SManga.UNKNOWN
+        }
+        manga.description = document.selectFirst("div#description")
+            ?.textNodes()
+            ?.firstOrNull { it.text().isNotBlank() }
+            ?.text()
         manga.thumbnail_url = document.selectFirst("img#cover")?.attr("abs:src")?.getHQThumbnail()
         return manga
     }

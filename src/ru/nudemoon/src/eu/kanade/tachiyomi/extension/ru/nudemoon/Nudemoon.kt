@@ -74,6 +74,13 @@ abstract class Nudemoon : HttpSource() {
     private val mangaSelector = "table.news_pic2"
     private val nextPageSelector = "a.small:contains(>)"
 
+    // Each card's title sits in its own nested table.news_pic2, so a plain select()
+    // also matches that inner table as a second, thumbnail-less "card" for the same entry.
+    private fun Element.mangaCards(): List<Element> {
+        val all = select(mangaSelector)
+        return all.filterNot { el -> el.parents().any(all::contains) }
+    }
+
     private fun parseMangaElement(element: Element): SManga? {
         val manga = SManga.create()
         manga.thumbnail_url = element.selectFirst("a img")?.attr("abs:src")
@@ -87,7 +94,7 @@ abstract class Nudemoon : HttpSource() {
 
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
-        val mangas = document.select(mangaSelector).mapNotNull(::parseMangaElement)
+        val mangas = document.mangaCards().mapNotNull(::parseMangaElement)
         val hasNextPage = document.selectFirst(nextPageSelector) != null
         return MangasPage(mangas, hasNextPage)
     }
@@ -116,7 +123,7 @@ abstract class Nudemoon : HttpSource() {
                 client.newCall(GET(pageListLink, headers)).execute().use { res ->
                     if (!res.isSuccessful) throw Exception("HTTP error ${res.code}")
                     val pageDoc = res.asJsoup()
-                    val chapters = pageDoc.select(mangaSelector).mapNotNull { element ->
+                    val chapters = pageDoc.mangaCards().mapNotNull { element ->
                         SChapter.create().apply {
                             val nameAndUrl = element.selectFirst("tr[valign=top] a:has(h2)")
                             name = nameAndUrl?.selectFirst("h2")?.text() ?: return@mapNotNull null
@@ -161,11 +168,21 @@ abstract class Nudemoon : HttpSource() {
         chapter_number = 0F
     }
 
+    // The chapter's own url is the details page (no reader on it); the actual reader lives
+    // at the same url with "-online" spliced in right after the numeric id, e.g.
+    // "/8152--foo.html" -> "/8152-online--foo.html". It embeds every page's url as a
+    // `images[N].src = '...'` assignment in one <script>, so a single request gets them all.
+    override fun pageListRequest(chapter: SChapter): Request {
+        val onlineUrl = chapter.url.replaceFirst(ONLINE_URL_REGEX, "$1-online--")
+        return GET(baseUrl + onlineUrl, headers)
+    }
+
     override fun pageListParse(response: Response): List<Page> {
-        val document = response.asJsoup()
-        val pages = document.select("""img[title~=.+][loading="lazy"]""").mapIndexed { index, img ->
-            Page(index, imageUrl = img.attr("abs:data-src"))
-        }
+        val html = response.body.string()
+        val pages = IMAGE_SRC_REGEX.findAll(html).mapIndexed { index, match ->
+            val src = match.groupValues[1]
+            Page(index, imageUrl = if (src.startsWith("http")) src else baseUrl + src)
+        }.toList()
         if (pages.isEmpty() && !cookieManager.getCookie(baseUrl).contains("fusion_user")) {
             throw Exception("Страницы не найдены. Возможно необходима авторизация в WebView")
         }
@@ -173,4 +190,9 @@ abstract class Nudemoon : HttpSource() {
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
+
+    companion object {
+        private val ONLINE_URL_REGEX = """^(/\d+)--""".toRegex()
+        private val IMAGE_SRC_REGEX = """images\[\d+]\.src = '([^']+)'""".toRegex()
+    }
 }

@@ -1,59 +1,22 @@
-<div align="center">
+# Umbra
 
-| Install to app | Up to date | Build | Discord |
-|:--------------:|:----------:|:-----:|:-------:|
-| [![Install](https://img.shields.io/badge/Click%20here%20to%20install%20repo-gray?style=flat&labelColor=red)](https://intradeus.github.io/http-protocol-redirector/?r=tachiyomi://add-repo?url=https://raw.githubusercontent.com/yuzono/manga-repo/repo/index.min.json) | [![Updated](https://img.shields.io/github/actions/workflow/status/yuzono/tachiyomi-extensions/auto_cherry_pick.yml?label=Updated&labelColor=27303D)](https://github.com/yuzono/tachiyomi-extensions/actions/workflows/auto_cherry_pick.yml) | [![Build](https://github.com/yuzono/tachiyomi-extensions/actions/workflows/build_push.yml/badge.svg)](https://github.com/yuzono/tachiyomi-extensions/actions/workflows/build_push.yml) | [![Discord](https://img.shields.io/discord/1377136877491982366.svg?label=&labelColor=6A7EC2&color=7389D8&logo=discord&logoColor=FFFFFF)](https://discord.gg/85MZhUX688) |
+A small [Komikku](https://github.com/komikku-app/komikku) / Mihon / Tachiyomi extension repository
+with exactly three sources, forked from [yuzono/tachiyomi-extensions](https://github.com/yuzono/tachiyomi-extensions)
+and trimmed down for personal use:
 
-[![Sponsor me on GitHub](https://custom-icon-badges.demolab.com/badge/-Sponsor-ea4aaa?style=for-the-badge&logo=heart&logoColor=white)](https://github.com/sponsors/cuong-tran "Sponsor me on GitHub")
+* AllHentai (`src/ru/allhentai`)
+* HenChan (`src/ru/henchan`)
+* Nude-Moon (`src/ru/nudemoon`)
 
-![Visitor Count](https://count.getloli.com/get/@yuzono?theme=capoo-2)
-</div>
-
-# Komikku / Mihon / Tachiyomi Extensions
-
-This repository contains extension catalogues which are compatible with [Komikku](https://github.com/komikku-app/komikku) and Mihon / Tachiyomi or other forks.
-
-This repository automatically merges any updates from [Keiyoushi](https://github.com/keiyoushi/extensions-source) every 6 hours to have the best of community contributions. Beside from that, it has a few of my developed extensions or some improvements. Enjoy!
-
-Some extensions from this repo provide better support for Komikku's `Suggestions` feature.
-
-## Recommend App
-
-### [Komikku](https://github.com/komikku-app/komikku)
-
-### [Mihon](https://github.com/mihonapp/mihon)
+Build logic, Gradle setup and CI are otherwise unchanged from upstream.
 
 ## How to add the repo
 
-**If you are new to repository/extensions, please read the [Yūzōnō Getting Started guide](https://yuzono.github.io/docs/guides/getting-started#adding-the-extension-repo) first.**
+Add this URL in Komikku under Extensions → repo icon:
 
-* You can add our repo by visiting the [Yūzōnō Website](https://yuzono.github.io/add-repo)
-* Otherwise, copy & paste the following URL:
-
-```html
-https://github.com/yuzono/manga-repo/raw/repo/index.pb
 ```
-
-## Requests
-
-To request a new source or bug fix, [create an issue](https://github.com/yuzono/tachiyomi-extensions/issues/new/choose).
-
-Please note that creating an issue does not mean that the source will be added or fixed in a timely
-fashion, because the work is volunteer-based. Some sources may also be impossible to do or prohibitively
-difficult to maintain.
-
-If you would like to see a request fulfilled and have the necessary skills to do so, consider contributing!
-Issues are up-for-grabs for any developer if there is no assigned user already.
-
-## Contributing
-
-Contributions are welcome!
-
-Check out the repo's [issue backlog](https://github.com/yuzono/tachiyomi-extensions/issues) for source requests and bug reports.
-
-To get started with development, see [CONTRIBUTING.md](./CONTRIBUTING.md).
-
-It might also be good to read our [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+https://raw.githubusercontent.com/Cheviiot/Umbra/repo/index.min.json
+```
 
 ## License
 
@@ -73,9 +36,5 @@ It might also be good to read our [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
 
 ## Disclaimer
 
-This project does not have any affiliation with the content providers available.
-
-This project is not affiliated with Komikku/Mihon/Tachiyomi. Don't ask for help about these extensions at the
-official support means of Komikku/Mihon/Tachiyomi. All credits to the codebase goes to the original contributors.
-
-The developer of this application does not have any affiliation with the content providers available.
+This project has no affiliation with the content providers available through it, nor with
+Komikku/Mihon/Tachiyomi. All credit for the underlying codebase goes to the original contributors.

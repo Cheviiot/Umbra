@@ -19,9 +19,9 @@ REPO_JAR_DIR = REPO_DIR / "jar"
 REPO_APK_DIR.mkdir(parents=True, exist_ok=True)
 REPO_JAR_DIR.mkdir(parents=True, exist_ok=True)
 
-APK_BASE_URL = "https://cdn.jsdelivr.net/gh/yuzono/manga-repo@repo/apk"
-JAR_BASE_URL = "https://raw.githubusercontent.com/yuzono/manga-repo/repo/jar"
-ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/yuzono/tachiyomi-extensions@master"
+APK_BASE_URL = "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk"
+JAR_BASE_URL = "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar"
+ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@master"
 
 to_delete: list[str] = json.loads(sys.argv[1])
 
@@ -101,8 +101,12 @@ for info_file in ARTIFACTS_DIR.glob("**/keiyoushi-source-info.json"):
     )
 
 # Merge with the already-published index, dropping the deleted/rebuilt modules.
-with REPO_DIR.joinpath("index.json").open() as f:
-    remote_proto = json_format.Parse(f.read(), index_pb2.Index())
+# (index.json is absent on the very first publish run, before anything's been deployed.)
+index_json_path = REPO_DIR.joinpath("index.json")
+if index_json_path.exists():
+    remote_proto = json_format.Parse(index_json_path.read_text(encoding="utf-8"), index_pb2.Index())
+else:
+    remote_proto = index_pb2.Index()
 
 all_extensions = [
     ext
@@ -113,12 +117,9 @@ all_extensions.extend(new_extensions)
 all_extensions.sort(key=lambda ext: ext.packageName)
 
 index = index_pb2.Index(
-    name="Yūzōnō",
-        badgeLabel="Yū",
-        signingKey="cbec121aa82ebb02aaa73806992e0368a97d47b5451ed6524816d03084c45905",
-        contact=index_pb2.Contact(
-            website="https://yuzono.github.io", discord="https://discord.gg/85MZhUX688"
-    ),
+    name="Umbra",
+    badgeLabel="Um",
+    signingKey="2e7b541a15fd3319f5e00c9a2505eab68b0e386f3e1ec1dc2d1fb2afa3c4eddb",
     extensionList=index_pb2.ExtensionList(extensions=all_extensions),
 )
 
@@ -129,6 +130,18 @@ with REPO_DIR.joinpath("index.json").open("w", encoding="utf-8") as f:
             always_print_fields_with_no_presence=False,
             preserving_proto_field_name=True,
         )
+    )
+
+with REPO_DIR.joinpath("index.min.json").open("w", encoding="utf-8") as f:
+    json.dump(
+        json_format.MessageToDict(
+            index,
+            always_print_fields_with_no_presence=False,
+            preserving_proto_field_name=True,
+        ),
+        f,
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
 
 with REPO_DIR.joinpath("index.pb").open("wb") as f:
