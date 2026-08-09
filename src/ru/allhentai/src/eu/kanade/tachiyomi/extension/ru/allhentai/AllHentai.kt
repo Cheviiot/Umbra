@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.multisrc.grouple.GroupLe
+import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
@@ -16,16 +17,31 @@ abstract class AllHentai : GroupLe() {
 
     override val isNeedAuth get() = baseUrl != "https://x.ahen.me"
 
+    // "tags" -> /list/tags/sort_NAME, a full paginated (~190-entry) listing the site happens to
+    // publish for this one field despite not exposing it on /search/advanced - see TagSelect
+    // and GroupLe.fullTagListPath/fetchPagedSlugList.
+    override val fullTagListPath = "tags"
+
     private val preferences: SharedPreferences by getPreferencesLazy()
 
     // Falls back to these hardcoded lists (checked against the live site's whole genre
     // vocabulary at the time of writing) until fetchFilterData's background fetch lands, or
     // permanently for whichever group it fails to parse - see GroupLe.fetchFilterData/filterGroup.
+    //
+    // "Пародии" isn't included above: the site doesn't expose it as a fixed list either (live
+    // autocomplete over what's presumably thousands of franchise names, no "list them all" page
+    // the way "Тэги" gets one). TextTag resolves whatever's typed against that same autocomplete
+    // at search time - see GroupLe.resolveTextTag. type=11 is the site's own id for this field,
+    // taken from the <select name="many-el_11"> on /search/advanced.
     override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         OrderBy(),
         CategoryList(data.filterGroup("Категории") ?: getCategoryList()),
         GenreList(data.filterGroup("Жанры") ?: getGenreList()),
         AdditionalFilterList(data.filterGroup("Фильтры") ?: getAdditionalFilterList()),
+        Filter.Separator(),
+        TagSelect("Тэг (полный список сайта)", data.filterTagList() ?: emptyList()),
+        Filter.Header("Точная пародия (на сайте их гораздо больше, чем жанров выше)"),
+        TextTag("Пародия", type = 11),
     )
 
     private fun getGenreList() = listOf(
