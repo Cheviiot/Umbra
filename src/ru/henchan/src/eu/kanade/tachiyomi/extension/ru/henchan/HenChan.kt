@@ -175,10 +175,17 @@ abstract class HenChan : MultiChan() {
         // site's own "related" listing puts first (oldest/root) so every part of a series
         // converges on the same library entry, no matter which one was opened.
         if (CHAPTER_SUFFIX_REGEX.containsMatchIn(manga.title)) {
-            val relatedUrl = document.baseUri().replace("/manga/", "/related/")
-            val rootLink = runCatching {
+            val relatedDoc = runCatching {
+                val relatedUrl = document.baseUri().replace("/manga/", "/related/")
                 client.newCall(GET(relatedUrl, headers)).execute().use { it.asJsoup() }
-            }.getOrNull()?.selectFirst("${chapterListSelector()} h2 a")
+            }.getOrNull()
+
+            // A title that merely looks like "part N" but has no true siblings yet gets a
+            // "похожий на" recommendations page here instead - completely unrelated titles.
+            // Bail out rather than risk merging into one of those.
+            val isRecommendations = relatedDoc?.select("#right > div:nth-child(4)")?.text()?.contains(" похожий на ") == true
+
+            val rootLink = if (isRecommendations) null else relatedDoc?.selectFirst("${chapterListSelector()} h2 a")
 
             if (rootLink != null && rootLink.attr("abs:href") != document.baseUri()) {
                 manga.title = rootLink.attr("title")
