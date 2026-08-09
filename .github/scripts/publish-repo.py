@@ -120,6 +120,7 @@ index = index_pb2.Index(
     name="Umbra",
     badgeLabel="Um",
     signingKey="2e7b541a15fd3319f5e00c9a2505eab68b0e386f3e1ec1dc2d1fb2afa3c4eddb",
+    contact=index_pb2.Contact(website="https://github.com/Cheviiot/Umbra"),
     extensionList=index_pb2.ExtensionList(extensions=all_extensions),
 )
 
