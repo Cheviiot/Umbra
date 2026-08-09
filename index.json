@@ -32,13 +32,13 @@
         "name": "HenChan",
         "packageName": "eu.kanade.tachiyomi.extension.ru.henchan",
         "resources": {
-          "apkUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk/tachiyomi-ru.henchan-v1.4.51.apk",
+          "apkUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk/tachiyomi-ru.henchan-v1.4.52.apk",
           "iconUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@master/src/ru/henchan/res/mipmap-xhdpi/ic_launcher.png",
-          "jarUrl": "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar/tachiyomi-ru.henchan-v1.4.51.jar"
+          "jarUrl": "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar/tachiyomi-ru.henchan-v1.4.52.jar"
         },
         "extensionLib": "1.4",
-        "versionCode": "51",
-        "versionName": "1.4.51",
+        "versionCode": "52",
+        "versionName": "1.4.52",
         "contentWarning": "CONTENT_WARNING_NSFW",
         "sources": [
           {
@@ -53,13 +53,13 @@
         "name": "Nude-Moon",
         "packageName": "eu.kanade.tachiyomi.extension.ru.nudemoon",
         "resources": {
-          "apkUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk/tachiyomi-ru.nudemoon-v1.4.31.apk",
+          "apkUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk/tachiyomi-ru.nudemoon-v1.4.32.apk",
           "iconUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@master/src/ru/nudemoon/res/mipmap-xhdpi/ic_launcher.png",
-          "jarUrl": "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar/tachiyomi-ru.nudemoon-v1.4.31.jar"
+          "jarUrl": "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar/tachiyomi-ru.nudemoon-v1.4.32.jar"
         },
         "extensionLib": "1.4",
-        "versionCode": "31",
-        "versionName": "1.4.31",
+        "versionCode": "32",
+        "versionName": "1.4.32",
         "contentWarning": "CONTENT_WARNING_NSFW",
         "sources": [
           {
