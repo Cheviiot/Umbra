@@ -36,6 +36,7 @@ abstract class Nudemoon : HttpSource() {
     override val client by lazy {
         network.client.newBuilder()
             .addNetworkInterceptor(CookieInterceptor(domain, listOf("NMfYa" to "1", "nm_mobile" to "1", "Domain" to domain)))
+            .addInterceptor(CloudflareWebViewInterceptor(domain))
             .build()
     }
 
