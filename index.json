@@ -32,13 +32,13 @@
         "name": "HenChan",
         "packageName": "eu.kanade.tachiyomi.extension.ru.henchan",
         "resources": {
-          "apkUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk/tachiyomi-ru.henchan-v1.4.48.apk",
+          "apkUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@repo/apk/tachiyomi-ru.henchan-v1.4.49.apk",
           "iconUrl": "https://cdn.jsdelivr.net/gh/Cheviiot/Umbra@master/src/ru/henchan/res/mipmap-xhdpi/ic_launcher.png",
-          "jarUrl": "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar/tachiyomi-ru.henchan-v1.4.48.jar"
+          "jarUrl": "https://raw.githubusercontent.com/Cheviiot/Umbra/repo/jar/tachiyomi-ru.henchan-v1.4.49.jar"
         },
         "extensionLib": "1.4",
-        "versionCode": "48",
-        "versionName": "1.4.48",
+        "versionCode": "49",
+        "versionName": "1.4.49",
         "contentWarning": "CONTENT_WARNING_NSFW",
         "sources": [
           {
