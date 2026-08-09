@@ -3,8 +3,8 @@ package eu.kanade.tachiyomi.multisrc.grouple
 import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.preference.EditTextPreference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.asObservableSuccess
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -12,19 +12,29 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.network.get
 import keiyoushi.network.rateLimit
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.get
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.string
+import keiyoushi.utils.stringOrNull
 import keiyoushi.utils.tryParse
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import rx.Observable
 import java.io.IOException
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
@@ -32,8 +42,9 @@ import java.util.Locale
 import java.util.regex.Pattern
 
 abstract class GroupLe :
-    HttpSource(),
+    KeiSource(),
     ConfigurableSource {
+
     private val dateFormat = SimpleDateFormat("dd.MM.yy", Locale.ROOT)
 
     private val preferences: SharedPreferences by getPreferencesLazy()
@@ -42,7 +53,7 @@ abstract class GroupLe :
 
     override val supportsLatest = true
 
-    override val client: OkHttpClient = network.client.newBuilder()
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = this
         .addNetworkInterceptor { chain ->
             val originalRequest = chain.request()
             val response = chain.proceed(originalRequest)
@@ -51,7 +62,7 @@ abstract class GroupLe :
                     )
             ) {
                 if (originalRequest.url.toString().contains("/list?")) {
-                    throw IOException("Смените домен: Поисковик > Расширения > $name > ⚙\uFE0F")
+                    throw IOException("Смените домен: Поисковик > Расширения > $name > ⚙️")
                 }
                 throw IOException(
                     "URL серии изменился. Перенесите/мигрируйте с $name на $name (или смежный с GroupLe), чтобы список глав обновился",
@@ -60,21 +71,15 @@ abstract class GroupLe :
             response
         }
         .rateLimit(2)
-        .build()
 
-    private val uagent = preferences.getString(UAGENT_TITLE, UAGENT_DEFAULT)!!
+    private val uagent get() = preferences.getString(UAGENT_TITLE, UAGENT_DEFAULT)!!
 
-    override fun headersBuilder() = Headers.Builder().apply {
-        add("User-Agent", uagent)
-        add("Referer", "$baseUrl/")
-    }
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("User-Agent", uagent)
 
     // ============================== Popular ==============================
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/list?sortType=rate&offset=${50 * (page - 1)}", headers)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangasPage(client.get("$baseUrl/list?sortType=rate&offset=${50 * (page - 1)}").asJsoup())
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = response.asJsoup()
-
+    private fun parseMangasPage(document: Document): MangasPage {
         val mangas = document.select("div.tile").map { element ->
             SManga.create().apply {
                 thumbnail_url = element.selectFirst("img.lazy")?.let {
@@ -84,6 +89,11 @@ abstract class GroupLe :
                     setUrlWithoutDomain(it.absUrl("href"))
                     title = it.attr("title")
                 }
+                // Every listing template renders each tile's genres as .elem_genre badges;
+                // stash them here so a subclass can filter listings by genre without an extra
+                // per-manga fetch (mangaDetailsParse below re-derives a fuller genre list from
+                // the details page anyway, so this is only ever a short-lived placeholder).
+                genre = element.select(".elem_genre").joinToString { it.text().trim() }
             }
         }
         val hasNextPage = document.selectFirst("a.nextLink") != null
@@ -92,19 +102,17 @@ abstract class GroupLe :
     }
 
     // ============================== Latest ===============================
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/list?sortType=updated&offset=${50 * (page - 1)}", headers)
-
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangasPage(client.get("$baseUrl/list?sortType=updated&offset=${50 * (page - 1)}").asJsoup())
 
     // ============================== Search ===============================
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/search/advancedResults?offset=${50 * (page - 1)}".toHttpUrl().newBuilder()
 
         if (query.isNotEmpty()) {
             url.addQueryParameter("q", query)
         }
 
-        (if (filters.isEmpty()) getFilterList() else filters).forEach { filter ->
+        (filters.ifEmpty { getFilterList() }).forEach { filter ->
             when (filter) {
                 is GenreList -> filter.state.forEach { genre ->
                     if (genre.state != Filter.TriState.STATE_IGNORE) {
@@ -147,37 +155,16 @@ abstract class GroupLe :
             }
         }
 
-        return GET(url.toString().replace("=%3D", "="), headers)
+        val document = client.get(url.toString().replace("=%3D", "=")).asJsoup()
+        return parseMangasPage(document)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
-
-    override fun fetchSearchManga(
-        page: Int,
-        query: String,
-        filters: FilterList,
-    ): Observable<MangasPage> {
-        if (query.startsWith("https://")) {
-            val url = query.toHttpUrl()
-            val titleId = url.pathSegments.firstOrNull()?.takeIf { it.isNotEmpty() } ?: throw Exception("Unsupported url")
-            return fetchSearchManga(page, "$PREFIX_SLUG_SEARCH$titleId", filters)
-        }
-
-        return if (query.startsWith(PREFIX_SLUG_SEARCH)) {
-            val realQuery = query.removePrefix(PREFIX_SLUG_SEARCH)
-            client.newCall(GET("$baseUrl/$realQuery", headers)).asObservableSuccess().map { response ->
-                val details = mangaDetailsParse(response)
-                details.url = "/$realQuery"
-                MangasPage(listOf(details), false)
-            }
-        } else {
-            client.newCall(searchMangaRequest(page, query, filters)).asObservableSuccess().map(::searchMangaParse)
-        }
-    }
+    // A pasted https:// series url gets routed here automatically by KeiSource instead of
+    // going through getSearchMangaList.
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? = mangaDetailsParse(client.get(url).asJsoup())
+        .apply { setUrlWithoutDomain(url.toString()) }
 
     // ============================== Details ==============================
-    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
-
     open fun mangaDetailsParse(document: Document): SManga {
         val manga = SManga.create()
 
@@ -304,24 +291,78 @@ abstract class GroupLe :
     open class MoreList(more: List<Genre>) : Filter.Group<Genre>("Прочее", more)
     open class AdditionalFilterList(fils: List<Genre>) : Filter.Group<Genre>("Фильтры", fils)
 
-    // ============================= Chapters ==============================
-    override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> = if (manga.status != SManga.LICENSED) {
-        client.newCall(chapterListRequest(manga)).asObservableSuccess().map { response -> chapterListParse(response, manga) }
-    } else {
-        Observable.error(Exception("Лицензировано - Нет глав"))
+    // ============================ Filter data =============================
+    // The genre/category/etc checkboxes on /search/advanced are grouped under a label
+    // ("Жанры", "Категории", "Фильтры", ...) with each option as an <li class="property">
+    // holding a hidden `el_*`/`s_*`-named input and a labelled span. Scrape it generically
+    // here; subclasses turn named groups back into their own filter lists via [filterGroup],
+    // falling back to their own hardcoded list when a group wasn't fetched (yet, or ever -
+    // some sites don't have every group this scrapes for).
+    override val supportsFilterFetching = true
+
+    override suspend fun fetchFilterData(): JsonElement {
+        val document = client.get("$baseUrl/search/advanced").asJsoup()
+        return buildJsonArray {
+            document.select("div.form-group.row").forEach { row ->
+                val groupName = row.selectFirst(".col-form-label a")?.text()?.trim()
+                    ?: row.selectFirst(".col-form-label")?.ownText()?.trim()
+                if (groupName.isNullOrBlank()) return@forEach
+
+                val options = row.select("li.property").mapNotNull { li ->
+                    val id = li.selectFirst("input[name]")?.attr("name")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                    val optionName = li.selectFirst("span[title]")?.attr("title")?.trim()?.takeIf(String::isNotBlank)
+                        ?: return@mapNotNull null
+                    id to optionName
+                }
+                if (options.isEmpty()) return@forEach
+
+                addJsonObject {
+                    put("group", groupName)
+                    putJsonArray("options") {
+                        options.forEach { (id, optionName) ->
+                            addJsonObject {
+                                put("id", id)
+                                put("name", optionName)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException("Not used")
+    protected fun JsonElement?.filterGroup(groupName: String): List<Genre>? = this?.jsonArray
+        ?.firstOrNull { it["group"]?.stringOrNull == groupName }
+        ?.get("options")?.jsonArray
+        ?.mapNotNull { option ->
+            val id = option["id"]?.stringOrNull ?: return@mapNotNull null
+            Genre(option["name"]!!.string, id)
+        }
+        ?.takeIf { it.isNotEmpty() }
 
-    private fun chapterListParse(response: Response, manga: SManga): List<SChapter> {
-        val document = response.asJsoup()
+    // ============================= Chapters ==============================
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val document = client.get(baseUrl + manga.url).asJsoup()
 
-        authGuard(document)
+        val updatedManga = if (fetchDetails) mangaDetailsParse(document) else manga
 
-        val chapterSearchParams = getChapterSearchParams(document)
+        val updatedChapters = if (!fetchChapters) {
+            chapters
+        } else if (updatedManga.status == SManga.LICENSED) {
+            throw Exception("Лицензировано - Нет глав")
+        } else {
+            authGuard(document)
+            val chapterSearchParams = getChapterSearchParams(document)
+            document.select("tr.item-row:has(td > a):has(td.date:not(.text-info))")
+                .map { chapterFromElement(it, updatedManga, chapterSearchParams) }
+        }
 
-        return document.select("tr.item-row:has(td > a):has(td.date:not(.text-info))")
-            .map { chapterFromElement(it, manga, chapterSearchParams) }
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     protected open fun getChapterSearchParams(document: Document): String {
@@ -356,15 +397,9 @@ abstract class GroupLe :
         chapter.chapter_number = chapterInf.attr("data-num").toFloat() / 10
 
         chapter.date_upload = dateFormat.tryParse(element.select("td.d-none").last()?.text())
-        return chapter
-    }
 
-    protected open fun chapterScanlatorFromElement(chapterLinkElement: Element, chapterRowElement: Element): String {
-        val translatorElement = chapterLinkElement.attr("title")
-        return translatorElement.takeIf { it.isNotBlank() }?.replace("(Переводчик),", "&")?.removeSuffix(" (Переводчик)") ?: ""
-    }
-
-    override fun prepareNewChapter(chapter: SChapter, manga: SManga) {
+        // KeiSource has no prepareNewChapter hook (final no-op in the base class), so this
+        // runs inline instead of as a separate post-processing pass over the built chapter.
         when {
             EXTRA_REGEX.containsMatchIn(chapter.name) -> {
                 if (chapter.name.substringAfter("Экстра").isBlank()) {
@@ -381,10 +416,18 @@ abstract class GroupLe :
                 }
             }
         }
+
+        return chapter
+    }
+
+    protected open fun chapterScanlatorFromElement(chapterLinkElement: Element, chapterRowElement: Element): String {
+        val translatorElement = chapterLinkElement.attr("title")
+        return translatorElement.takeIf { it.isNotBlank() }?.replace("(Переводчик),", "&")?.removeSuffix(" (Переводчик)") ?: ""
     }
 
     // =============================== Pages ===============================
-    override fun pageListParse(response: Response): List<Page> {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.get(baseUrl + chapter.url)
         val document = response.asJsoup()
 
         authGuard(document)
@@ -443,8 +486,6 @@ abstract class GroupLe :
         return pages
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
     override fun imageRequest(page: Page): Request {
         val imgHeader = Headers.Builder().apply {
             add("User-Agent", "Mozilla/5.0 (Windows NT 6.3; WOW64)")
@@ -456,11 +497,11 @@ abstract class GroupLe :
     // ============================= Utilities =============================
     private fun authGuard(document: Document) {
         if (document.select(".user-avatar").isEmpty() && isNeedAuth) {
-            throw Exception("Для просмотра контента необходима авторизация через WebView\uD83C\uDF0E")
+            throw Exception("Для просмотра контента необходима авторизация через WebView🌎")
         }
     }
 
-    override fun setupPreferenceScreen(screen: androidx.preference.PreferenceScreen) {
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
         EditTextPreference(screen.context).apply {
             key = UAGENT_TITLE
             title = UAGENT_TITLE
@@ -481,7 +522,6 @@ abstract class GroupLe :
     companion object {
         private const val UAGENT_TITLE = "User-Agent(для некоторых стран)"
         private const val UAGENT_DEFAULT = "arora"
-        const val PREFIX_SLUG_SEARCH = "slug:"
         private val USER_HASH_REGEX = "user_hash.+'(.+)'".toRegex()
         private val EXTRA_REGEX = Regex("""\s*([0-9]+\sЭкстра)\s*""")
         private val SINGLE_REGEX = Regex("""\s*Сингл\s*""")

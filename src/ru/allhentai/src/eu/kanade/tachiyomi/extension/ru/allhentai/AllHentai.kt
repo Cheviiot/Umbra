@@ -7,10 +7,9 @@ import eu.kanade.tachiyomi.multisrc.grouple.GroupLe
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.utils.getPreferencesLazy
-import okhttp3.Response
+import kotlinx.serialization.json.JsonElement
 
 @Source
 abstract class AllHentai : GroupLe() {
@@ -19,11 +18,14 @@ abstract class AllHentai : GroupLe() {
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
-    override fun getFilterList() = FilterList(
+    // Falls back to these hardcoded lists (checked against the live site's whole genre
+    // vocabulary at the time of writing) until fetchFilterData's background fetch lands, or
+    // permanently for whichever group it fails to parse - see GroupLe.fetchFilterData/filterGroup.
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         OrderBy(),
-        CategoryList(getCategoryList()),
-        GenreList(getGenreList()),
-        AdditionalFilterList(getAdditionalFilterList()),
+        CategoryList(data.filterGroup("Категории") ?: getCategoryList()),
+        GenreList(data.filterGroup("Жанры") ?: getGenreList()),
+        AdditionalFilterList(data.filterGroup("Фильтры") ?: getAdditionalFilterList()),
     )
 
     private fun getGenreList() = listOf(
@@ -85,37 +87,29 @@ abstract class AllHentai : GroupLe() {
         Genre("Онгоинг", "s_ongoing"),
     )
 
-    // The site has no "яой"/"гей" genre tag at all - its whole genre vocabulary (checked
-    // against every entry in the advanced search form) is the ~30 tags in getGenreList().
-    // GenreList exclusion in the filter UI already lets a user drop a genre, but only for
-    // Search - Popular/Latest ignore filters entirely in GroupLe, and re-implement their own
-    // parsing rather than share it, so there's no single method to hook. Re-parse here instead,
-    // dropping tiles whose badges (same markup on every listing template, so no extra request)
-    // match a hidden genre. latestUpdatesParse/searchMangaParse both just call
-    // popularMangaParse(response) in GroupLe, so overriding only this one covers all three.
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = response.asJsoup()
+    // The site has no "яой"/"гей" tag anywhere - checked its whole genre vocabulary (every
+    // group on /search/advanced, ~50 tags) *and* its much bigger free-text tag search
+    // (/search/elementsByType?type=40, searched "яой"/"гей"/"yaoi"/"BL": all empty). This is
+    // the closest available: hide any of the real genres everywhere, not just Search - GroupLe's
+    // genre exclusion in the filter UI only ever applied there, Popular/Latest ignored filters
+    // entirely. GroupLe.parseMangasPage stashes each tile's genre badges on manga.genre, so
+    // filtering here needs no extra request.
+    override suspend fun getPopularManga(page: Int): MangasPage = dropHiddenGenres(super.getPopularManga(page))
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = dropHiddenGenres(super.getLatestUpdates(page))
+
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = dropHiddenGenres(super.getSearchMangaList(page, query, filters))
+
+    private fun dropHiddenGenres(page: MangasPage): MangasPage {
         val hidden = hiddenGenres()
-
-        val mangas = document.select("div.tile").mapNotNull { element ->
-            if (hidden.isNotEmpty() && element.select(".elem_genre").any { it.text().trim().lowercase() in hidden }) {
-                return@mapNotNull null
-            }
-
-            SManga.create().apply {
-                thumbnail_url = element.selectFirst("img.lazy")?.let {
-                    it.absUrl("data-original").ifEmpty { it.attr("data-original") }
-                }?.replace("_p.", ".")
-                element.selectFirst("h3 > a")?.let {
-                    setUrlWithoutDomain(it.absUrl("href"))
-                    title = it.attr("title")
-                }
-            }
-        }
-        val hasNextPage = document.selectFirst("a.nextLink") != null
-
-        return MangasPage(mangas, hasNextPage)
+        if (hidden.isEmpty()) return page
+        return MangasPage(page.mangas.filterNot { it.isHiddenByGenre(hidden) }, page.hasNextPage)
     }
+
+    private fun SManga.isHiddenByGenre(hidden: Set<String>): Boolean = genre.orEmpty()
+        .split(",")
+        .map { it.trim().lowercase() }
+        .any { it in hidden }
 
     private fun hiddenGenres(): Set<String> = preferences.getStringSet(HIDDEN_GENRES_PREF, emptySet())
         .orEmpty()
@@ -130,6 +124,7 @@ abstract class AllHentai : GroupLe() {
             val names = getGenreList().map { it.name }.toTypedArray()
             entries = names
             entryValues = names
+            setDefaultValue(emptySet<String>())
         }.let(screen::addPreference)
     }
 
